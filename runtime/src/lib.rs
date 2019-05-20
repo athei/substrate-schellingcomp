@@ -14,7 +14,7 @@ use primitives::bytes;
 use primitives::{ed25519, sr25519, OpaqueMetadata};
 use runtime_primitives::{
 	ApplyResult, transaction_validity::TransactionValidity, generic, create_runtime_str,
-	traits::{self, NumberFor, BlakeTwo256, Block as BlockT, StaticLookup, Verify}
+	traits::{self, NumberFor, BlakeTwo256, Block as BlockT, StaticLookup, Verify},
 };
 use client::{
 	block_builder::api::{CheckInherentsResult, InherentData, self as block_builder_api},
@@ -187,9 +187,12 @@ impl sudo::Trait for Runtime {
 	type Proposal = Call;
 }
 
-/// Used for the module template in `./template.rs`
 impl schellingcomp::Trait for Runtime {
 	type Event = Event;
+	type Currency = Balances;
+	type Task = Hash;
+	type Outcome = u64;
+	type Admin = system::EnsureRoot<Self::AccountId>;
 }
 
 construct_runtime!(

@@ -230,60 +230,129 @@
 //! // that the implementation is based on.
 //! </pre></p></details>
 
-use support::{decl_module, decl_storage, decl_event, StorageValue, dispatch::Result};
+use support::{
+	decl_module, decl_storage, decl_event, StorageValue, StorageMap, dispatch::Result,
+	ensure, traits::Currency, traits::ReservableCurrency,
+	dispatch::Vec,
+};
 use system::ensure_signed;
+use parity_codec::{Encode, Decode, Codec};
+use runtime_primitives::traits::{EnsureOrigin, SimpleArithmetic};
 
-/// The module's configuration trait.
-pub trait Trait: system::Trait {
-	// TODO: Add other types and constants required configure this module.
+type Salt = u128;
+type ClientIndex = u64;
+type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
+type ClientOf<T> = Client<<T as system::Trait>::AccountId, BalanceOf<T>>; 
+type ComputationOf<T> = Computation<
+	<T as system::Trait>::Hash,
+	<T as Trait>::Task,
+	<T as system::Trait>::AccountId,
+	<T as timestamp::Trait>::Moment,
+	<T as Trait>::Outcome
+>;
 
+pub trait Trait: balances::Trait + timestamp::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+	/// The currency in which computation power should be payed.
+	type Currency: ReservableCurrency<Self::AccountId>;
+	/// The computational task that should be offloaded.
+	type Task: Codec + Default;
+	/// The result that should be calculated from the Task.
+	type Outcome: SimpleArithmetic + Codec + Default;
+	/// The origin that is allowed configure rewards and deposits.
+	type Admin: EnsureOrigin<Self::Origin>;
 }
 
-/// This module's storage items.
 decl_storage! {
 	trait Store for Module<T: Trait> as Schellingcomp {
-		// Just a dummy storage item. 
-		// Here we are declaring a StorageValue, `Something` as a Option<u32>
-		// `get(something)` is the default getter which returns either the stored `u32` or `None` if nothing stored
-		Something get(something): Option<u32>;
+		Reward get(reward): BalanceOf<T>;
+		Deposit get(deposit): BalanceOf<T>;
+
+		Computations: map T::Hash => ComputationOf<T>;
+		Clients: map T::AccountId => ClientOf<T>;
+		ClientCount get(client_count): ClientIndex;
+
+		AvailableClientsArray: map ClientIndex => T::AccountId;
+		AvailableClientsCount get(available_clients): ClientIndex;
+		AvailableClientsIndex: map T::AccountId => ClientIndex;
 	}
 }
 
 decl_module! {
-	/// The module declaration.
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
-		// Initializing events
-		// this is needed only if you are using events in your module
 		fn deposit_event<T>() = default;
 
-		// Just a dummy entry point.
-		// function that can be called by the external world as an extrinsics call
-		// takes a parameter of the type `AccountId`, stores it and emits an event
-		pub fn do_something(origin, something: u32) -> Result {
-			// TODO: You only need this if you want to check it was signed.
-			let who = ensure_signed(origin)?;
+		fn register_client(origin) -> Result {
+			let sender = ensure_signed(origin)?;
 
-			// TODO: Code to execute when something calls this.
-			// For example: the following line stores the passed in u32 in the storage
-			<Something<T>>::put(something);
+			ensure!(!<Clients<T>>::exists(&sender), "Client is already registered");
 
-			// here we are raising the Something event
-			Self::deposit_event(RawEvent::SomethingStored(something, who));
+			let total_clients = Self::client_count().checked_add(1)
+                .ok_or("Maximum number of clients reached")?;
+
+			T::Currency::reserve(&sender, Self::deposit())
+				.map_err(|_| "Client's balance too low")?;
+
+			let client = Client {
+				id: sender.clone(),
+				deposit: Self::deposit(),
+				busy: false
+			};
+
+			<Clients<T>>::insert(&sender, &client);
+			<ClientCount<T>>::put(total_clients);
+			Self::add_available(sender)
+				.expect("`ClientCount` is already incremented to the count of all clients, \
+				`AvailableClientsCount` has the same type as `ClientCount`, \
+				`AvailableClientsCount` <= `ClientsCount - 1`, \
+				therefore no overflow of `AvailableClientsCount` can happen; \
+				`client` not in `Clients` -> `client` not in `AvailableClientsIndex`; \
+				qed");
+
 			Ok(())
 		}
 	}
 }
 
+impl<T: Trait> Module<T> {
+	fn add_available(client: T::AccountId) -> Result {
+		let available = Self::available_clients();
+		let available_next = available.checked_add(1).ok_or("Available index overflow.")?;
+
+		ensure!(!<AvailableClientsIndex<T>>::exists(&client), "Client is already available.");
+
+		<AvailableClientsArray<T>>::insert(available, &client);
+		<AvailableClientsCount<T>>::put(available_next);
+		<AvailableClientsIndex<T>>::insert(client, available);
+
+		Ok(())
+	}
+}
+
 decl_event!(
 	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-		// Just a dummy event.
-		// Event `Something` is declared with a parameter of the type `u32` and `AccountId`
-		// To emit this event, we call the deposit funtion, from our runtime funtions
 		SomethingStored(u32, AccountId),
 	}
 );
+
+#[derive(Encode, Decode, Default)]
+struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
+	id: Hash,
+	task: Task,
+	treshold: u32,
+	grace_period: Moment,
+	commits: Vec<Hash>,
+	reveals: Vec<(Salt, Outcome)>,
+	clients: Vec<AccountId>,
+}
+
+#[derive(Encode, Decode, Clone, Default, PartialEq, Eq)]
+struct Client<AccountId, Balance>  {
+	id: AccountId,
+	deposit: Balance,
+	busy: bool
+}
 
 /// tests for this module
 #[cfg(test)]
@@ -337,9 +406,9 @@ mod tests {
 		with_externalities(&mut new_test_ext(), || {
 			// Just a dummy test for the dummy funtion `do_something`
 			// calling the `do_something` function with a value 42
-			assert_ok!(Schellingcomp::do_something(Origin::signed(1), 42));
+			//assert_ok!(Schellingcomp::do_something(Origin::signed(1), 42));
 			// asserting that the stored value is equal to what we stored
-			assert_eq!(Schellingcomp::something(), Some(42));
+			//assert_eq!(Schellingcomp::something(), Some(42));
 		});
 	}
 }
