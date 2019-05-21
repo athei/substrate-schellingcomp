@@ -283,6 +283,13 @@ decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		fn deposit_event<T>() = default;
 
+		fn configure(origin, reward: BalanceOf<T>, deposit: BalanceOf<T>) {
+			T::Admin::ensure_origin(origin)?;
+
+			<Reward<T>>::put(reward);
+			<Deposit<T>>::put(deposit);
+		}
+
 		fn register_client(origin) -> Result {
 			let sender = ensure_signed(origin)?;
 
