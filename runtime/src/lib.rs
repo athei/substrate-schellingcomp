@@ -190,7 +190,7 @@ impl sudo::Trait for Runtime {
 impl schellingcomp::Trait for Runtime {
 	type Event = Event;
 	type Currency = Balances;
-	type Task = Hash;
+	type Task = u64;
 	type Outcome = u64;
 	type Admin = system::EnsureRoot<Self::AccountId>;
 }

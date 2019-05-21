@@ -232,12 +232,15 @@
 
 use support::{
 	decl_module, decl_storage, decl_event, StorageValue, StorageMap, dispatch::Result,
-	ensure, traits::Currency, traits::ReservableCurrency,
-	dispatch::Vec,
+	ensure, traits::Currency, traits::ReservableCurrency, dispatch::Vec, dispatch::Parameter,
 };
 use system::ensure_signed;
-use parity_codec::{Encode, Decode, Codec};
-use runtime_primitives::traits::{EnsureOrigin, SimpleArithmetic};
+use parity_codec::{Encode, Decode};
+use runtime_primitives::traits::{As, EnsureOrigin, Hash};
+use core::convert::TryInto;
+use core::mem::size_of;
+use rand::{Rng, SeedableRng, rngs::SmallRng, distributions::Uniform};
+use rstd::vec;
 
 type Salt = u128;
 type ClientIndex = u64;
@@ -257,17 +260,33 @@ pub trait Trait: balances::Trait + timestamp::Trait {
 	/// The currency in which computation power should be payed.
 	type Currency: ReservableCurrency<Self::AccountId>;
 	/// The computational task that should be offloaded.
-	type Task: Codec + Default;
+	type Task: Parameter + Default;
 	/// The result that should be calculated from the Task.
-	type Outcome: SimpleArithmetic + Codec + Default;
+	type Outcome: Parameter + Default;
 	/// The origin that is allowed configure rewards and deposits.
 	type Admin: EnsureOrigin<Self::Origin>;
 }
+
+decl_event!(
+	pub enum Event<T> where
+		Balance = BalanceOf<T>,
+		AccountId = <T as system::Trait>::AccountId,
+		Hash = <T as system::Trait>::Hash,
+		Moment = <T as timestamp::Trait>::Moment,
+	{
+		ConfigurationChanged(Balance, Balance, Moment, Moment),
+		ClientRegistered(AccountId),
+		ClientRemoved(AccountId),
+		TaskOffloaded(Hash),
+	}
+);
 
 decl_storage! {
 	trait Store for Module<T: Trait> as Schellingcomp {
 		Reward get(reward): BalanceOf<T>;
 		Deposit get(deposit): BalanceOf<T>;
+		TimelimitCommit get(timelimit_commit): T::Moment;
+		TimelimitReveal get(timelimit_reveal): T::Moment;
 
 		Computations: map T::Hash => ComputationOf<T>;
 		Clients: map T::AccountId => ClientOf<T>;
@@ -283,13 +302,15 @@ decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		fn deposit_event<T>() = default;
 
-		fn configure(origin, reward: BalanceOf<T>, deposit: BalanceOf<T>) {
+		fn configure(origin, reward: BalanceOf<T>, deposit: BalanceOf<T>, timelimit_commit: T::Moment, timelimit_reveal: T::Moment) {
 			T::Admin::ensure_origin(origin)?;
 
 			<Reward<T>>::put(&reward);
 			<Deposit<T>>::put(&deposit);
+			<TimelimitCommit<T>>::put(&timelimit_reveal);
+			<TimelimitReveal<T>>::put(&timelimit_commit);
 
-			Self::deposit_event(RawEvent::ConfigurationChanged(reward, deposit));
+			Self::deposit_event(RawEvent::ConfigurationChanged(reward, deposit, timelimit_commit, timelimit_reveal));
 		}
 
 		fn register_client(origin) {
@@ -338,6 +359,80 @@ decl_module! {
 
 			Self::deposit_event(RawEvent::ClientRemoved(sender));
 		}
+
+		fn offload_task(origin, task: T::Task, client_count: ClientIndex) {
+			let sender = ensure_signed(origin)?;
+			let reward: BalanceOf<T> = Self::reward().as_().checked_mul(client_count)
+				.map(As::sa)
+				.ok_or("Reward calculation overflow")?;
+
+			ensure!(T::Currency::can_reserve(&sender, reward), "Not enough balance");
+
+			ensure!(client_count > 0, "Must offload to at least one client");
+			ensure!(client_count <= Self::available_clients(), "Not enough clients available.");
+			let client_count: usize = client_count.try_into().map_err(|_| "Too many clients")?;
+
+			let random_hash = (<system::Module<T>>::random_seed(), &sender)
+				.using_encoded(T::Hashing::hash);
+			ensure!(!<Computations<T>>::exists(&random_hash), "This computation already exists.");
+
+			type Seed = <SmallRng as SeedableRng>::Seed;
+			let seed_slice = random_hash.as_ref().get(..size_of::<Seed>())
+				.ok_or("Seed too small for chosen prng.")?;
+			let seed: &<SmallRng as SeedableRng>::Seed = seed_slice.try_into()
+				.map_err(|_| "Failed to convert to prng seeds")?;
+
+			// Alloc Vecs so that they cannot panic later
+			let mut clients = Vec::with_capacity(client_count);
+			let mut indices = Vec::with_capacity(client_count);
+			let commits = vec![None; client_count];
+			let reveals = vec![None; client_count];
+
+
+			// Infallible from here here on
+
+
+			// Draw clients randomly from available ones.
+			// We know that this is bounded because we checked that there are enough
+			// clients available. However, in a production environment this probably should
+			// be handled differently.
+			let mut prng = SmallRng::from_seed(*seed);
+			let distribution = Uniform::new(0, Self::available_clients());
+			for rng in prng.sample_iter::<ClientIndex, _>(&distribution) {
+				if indices.contains(&rng) {
+					continue;
+				}
+				let id = <AvailableClientsArray<T>>::get(&rng);
+				Self::remove_available(&id)
+					.expect("`id is pulled from the AvailableClientsArray, \
+					therefore the availibilty check will not fail; \
+					qed");
+				indices.push(rng);
+				clients.push(id);
+				if clients.len() == client_count {
+					break;
+				}
+			}
+
+			let computation: ComputationOf<T> = Computation {
+				id: random_hash,
+				task,
+				started_at: <timestamp::Module<T>>::get(),
+				reveal_started_at: None,
+				timelimit_commit: Self::timelimit_commit(),
+				timelimit_reveal: Self::timelimit_reveal(),
+				clients,
+				commits,
+				reveals,
+			};
+
+			T::Currency::reserve(&sender, reward).map_err(|_| "Not enough balance.")
+				.expect("Balance was checked early, \
+				No changes to balance in between; \
+				qed");
+			<Computations<T>>::insert(&random_hash, computation);
+			Self::deposit_event(RawEvent::TaskOffloaded(random_hash));
+		}
 	}
 }
 
@@ -359,7 +454,10 @@ impl<T: Trait> Module<T> {
 		ensure!(<AvailableClientsIndex<T>>::exists(client), "Client is not available.");
 		let index = <AvailableClientsIndex<T>>::get(client);
 		let available = Self::available_clients();
-		let index_tail = available.checked_sub(1).ok_or("Available index underflow.")?;
+		let index_tail = available.checked_sub(1).ok_or("Available index underflow.")
+			.expect("`client`is contained in `AvailableClientsIndex`, \
+			therefore `available` is at least 1; \
+			qed");
 
 		// swap tail with to be removed client
 		if index != index_tail {
@@ -376,24 +474,18 @@ impl<T: Trait> Module<T> {
 	}
 }
 
-decl_event!(
-	pub enum Event<T> where Balance = BalanceOf<T>, AccountId = <T as system::Trait>::AccountId {
-		ConfigurationChanged(Balance, Balance),
-		ClientRegistered(AccountId),
-		ClientRemoved(AccountId),
-	}
-);
-
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Default)]
 pub struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
 	id: Hash,
 	task: Task,
-	treshold: u32,
-	grace_period: Moment,
-	commits: Vec<Hash>,
-	reveals: Vec<(Salt, Outcome)>,
+	started_at: Moment,
+	reveal_started_at: Option<Moment>,
+	timelimit_commit: Moment,
+	timelimit_reveal: Moment,
 	clients: Vec<AccountId>,
+	commits: Vec<Option<Hash>>,
+	reveals: Vec<Option<(Salt, Outcome)>>,
 }
 
 #[cfg_attr(feature = "std", derive(Debug))]

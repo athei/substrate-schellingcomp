@@ -152,3 +152,7 @@ default_features = false
 git = 'https://github.com/paritytech/substrate.git'
 package = 'sr-version'
 rev = '1d61a492adee6d48569f475705c92699ee3cd69b'
+
+[dependencies.rand]
+default_features = false
+version = "0.6"
