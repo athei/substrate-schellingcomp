@@ -286,11 +286,13 @@ decl_module! {
 		fn configure(origin, reward: BalanceOf<T>, deposit: BalanceOf<T>) {
 			T::Admin::ensure_origin(origin)?;
 
-			<Reward<T>>::put(reward);
-			<Deposit<T>>::put(deposit);
+			<Reward<T>>::put(&reward);
+			<Deposit<T>>::put(&deposit);
+
+			Self::deposit_event(RawEvent::ConfigurationChanged(reward, deposit));
 		}
 
-		fn register_client(origin) -> Result {
+		fn register_client(origin) {
 			let sender = ensure_signed(origin)?;
 
 			ensure!(!<Clients<T>>::exists(&sender), "Client is already registered");
@@ -317,7 +319,7 @@ decl_module! {
 				`client` not in `Clients` -> `client` not in `AvailableClientsIndex`; \
 				qed");
 
-			Ok(())
+			Self::deposit_event(RawEvent::ClientRegistered(client));
 		}
 	}
 }
@@ -338,13 +340,15 @@ impl<T: Trait> Module<T> {
 }
 
 decl_event!(
-	pub enum Event<T> where AccountId = <T as system::Trait>::AccountId {
-		SomethingStored(u32, AccountId),
+	pub enum Event<T> where Balance = BalanceOf<T>, Client = ClientOf<T> {
+		ConfigurationChanged(Balance, Balance),
+		ClientRegistered(Client),
 	}
 );
 
+#[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Default)]
-struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
+pub struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
 	id: Hash,
 	task: Task,
 	treshold: u32,
@@ -354,8 +358,9 @@ struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
 	clients: Vec<AccountId>,
 }
 
+#[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Clone, Default, PartialEq, Eq)]
-struct Client<AccountId, Balance>  {
+pub struct Client<AccountId, Balance>  {
 	id: AccountId,
 	deposit: Balance,
 	busy: bool
