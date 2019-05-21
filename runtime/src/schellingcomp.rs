@@ -311,7 +311,7 @@ decl_module! {
 
 			<Clients<T>>::insert(&sender, &client);
 			<ClientCount<T>>::put(total_clients);
-			Self::add_available(sender)
+			Self::add_available(&sender)
 				.expect("`ClientCount` is already incremented to the count of all clients, \
 				`AvailableClientsCount` has the same type as `ClientCount`, \
 				`AvailableClientsCount` <= `ClientsCount - 1`, \
@@ -319,30 +319,68 @@ decl_module! {
 				`client` not in `Clients` -> `client` not in `AvailableClientsIndex`; \
 				qed");
 
-			Self::deposit_event(RawEvent::ClientRegistered(client));
+			Self::deposit_event(RawEvent::ClientRegistered(sender));
+		}
+
+		fn remove_client(origin) {
+			let sender = ensure_signed(origin)?;
+			ensure!(<Clients<T>>::exists(&sender), "Client is not registered");
+			ensure!(<AvailableClientsIndex<T>>::exists(&sender), "Client must not be busy");
+
+			let client = <Clients<T>>::get(&sender);
+
+			let total_clients = Self::client_count().checked_sub(1)
+                .ok_or("Client number underflow")?;
+
+			Self::remove_available(&sender)?;
+			T::Currency::unreserve(&sender, client.deposit);
+			<ClientCount<T>>::put(total_clients);
+
+			Self::deposit_event(RawEvent::ClientRemoved(sender));
 		}
 	}
 }
 
 impl<T: Trait> Module<T> {
-	fn add_available(client: T::AccountId) -> Result {
+	fn add_available(client: &T::AccountId) -> Result {
 		let available = Self::available_clients();
-		let available_next = available.checked_add(1).ok_or("Available index overflow.")?;
+		let available_add = available.checked_add(1).ok_or("Available index overflow.")?;
 
-		ensure!(!<AvailableClientsIndex<T>>::exists(&client), "Client is already available.");
+		ensure!(!<AvailableClientsIndex<T>>::exists(client), "Client is already available.");
 
-		<AvailableClientsArray<T>>::insert(available, &client);
-		<AvailableClientsCount<T>>::put(available_next);
+		<AvailableClientsArray<T>>::insert(available, client);
+		<AvailableClientsCount<T>>::put(available_add);
 		<AvailableClientsIndex<T>>::insert(client, available);
+
+		Ok(())
+	}
+
+	fn remove_available(client: &T::AccountId) -> Result {
+		ensure!(<AvailableClientsIndex<T>>::exists(client), "Client is not available.");
+		let index = <AvailableClientsIndex<T>>::get(client);
+		let available = Self::available_clients();
+		let index_tail = available.checked_sub(1).ok_or("Available index underflow.")?;
+
+		// swap tail with to be removed client
+		if index != index_tail {
+			let last_client = <AvailableClientsArray<T>>::get(index_tail);
+			<AvailableClientsArray<T>>::insert(&index, &last_client);
+			<AvailableClientsIndex<T>>::insert(last_client, &index);
+		}
+
+		<AvailableClientsArray<T>>::remove(index_tail);
+		<AvailableClientsCount<T>>::put(index_tail);
+		<AvailableClientsIndex<T>>::remove(client);
 
 		Ok(())
 	}
 }
 
 decl_event!(
-	pub enum Event<T> where Balance = BalanceOf<T>, Client = ClientOf<T> {
+	pub enum Event<T> where Balance = BalanceOf<T>, AccountId = <T as system::Trait>::AccountId {
 		ConfigurationChanged(Balance, Balance),
-		ClientRegistered(Client),
+		ClientRegistered(AccountId),
+		ClientRemoved(AccountId),
 	}
 );
 
