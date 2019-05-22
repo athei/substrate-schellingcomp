@@ -16,6 +16,7 @@ use runtime_primitives::{
 	ApplyResult, transaction_validity::TransactionValidity, generic, create_runtime_str,
 	traits::{self, NumberFor, BlakeTwo256, Block as BlockT, StaticLookup, Verify},
 };
+use support::traits::OnUnbalanced;
 use client::{
 	block_builder::api::{CheckInherentsResult, InherentData, self as block_builder_api},
 	runtime_api, impl_runtime_apis
@@ -193,6 +194,21 @@ impl schellingcomp::Trait for Runtime {
 	type Task = u64;
 	type Outcome = u64;
 	type Admin = system::EnsureRoot<Self::AccountId>;
+	type Reward = SchellingDelegate;
+	type Slash = SchellingDelegate;
+}
+
+pub struct SchellingDelegate {}
+
+impl<AccountId, Outcome, Balance> schellingcomp::OnReward<AccountId, Outcome, Balance> for SchellingDelegate {
+	fn on_reward(_good_clients: Vec<(AccountId, Outcome)>, _shared_reward: Balance) {
+	}
+}
+
+impl<Imbalance> OnUnbalanced<Imbalance> for SchellingDelegate {
+	fn on_unbalanced(_amount: Imbalance) {
+
+	}
 }
 
 construct_runtime!(

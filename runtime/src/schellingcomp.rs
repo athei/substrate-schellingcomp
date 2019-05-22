@@ -233,10 +233,11 @@
 use support::{
 	decl_module, decl_storage, decl_event, StorageValue, StorageMap, dispatch::Result,
 	ensure, traits::Currency, traits::ReservableCurrency, dispatch::Vec, dispatch::Parameter,
+	traits::OnUnbalanced
 };
 use system::ensure_signed;
 use parity_codec::{Encode, Decode};
-use runtime_primitives::traits::{As, EnsureOrigin, Hash, CheckedSub};
+use runtime_primitives::traits::{As, EnsureOrigin, Hash};
 use core::convert::TryInto;
 use core::mem::size_of;
 use rand::{Rng, SeedableRng, rngs::SmallRng, distributions::Uniform};
@@ -244,10 +245,12 @@ use rstd::vec;
 
 type ClientIndex = u64;
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
-type ClientOf<T> = Client<<T as system::Trait>::AccountId, BalanceOf<T>>; 
+type NegativeImbalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::NegativeImbalance;
+type ClientOf<T> = Client<<T as system::Trait>::AccountId, BalanceOf<T>>;
 type ComputationOf<T> = Computation<
 	<T as system::Trait>::Hash,
 	<T as Trait>::Task,
+	BalanceOf<T>,
 	<T as system::Trait>::AccountId,
 	<T as timestamp::Trait>::Moment,
 	<T as Trait>::Outcome
@@ -264,6 +267,14 @@ pub trait Trait: balances::Trait + timestamp::Trait {
 	type Outcome: Parameter + Default;
 	/// The origin that is allowed configure rewards and deposits.
 	type Admin: EnsureOrigin<Self::Origin>;
+	/// Functor that is responsible to distribute the result.
+	type Reward: OnReward<Self::AccountId, Self::Outcome, BalanceOf<Self>>;
+	/// Called a deposit is slashed.
+	type Slash: OnUnbalanced<NegativeImbalanceOf<Self>>;
+}
+
+pub trait OnReward<AccountId, Outcome, Balance> {
+	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, shared_reward: Balance);
 }
 
 decl_event!(
@@ -412,9 +423,16 @@ decl_module! {
 				}
 			}
 
+			T::Currency::reserve(&sender, reward).map_err(|_| "Not enough balance.")
+				.expect("Balance was checked early, \
+				No changes to balance in between; \
+				qed");
+
 			let computation: ComputationOf<T> = Computation {
 				id: random_hash,
+				owner: sender,
 				task,
+				reward,
 				started_at: <timestamp::Module<T>>::get(),
 				reveal_started_at: None,
 				timelimit_commit: Self::timelimit_commit(),
@@ -424,10 +442,6 @@ decl_module! {
 				reveals,
 			};
 
-			T::Currency::reserve(&sender, reward).map_err(|_| "Not enough balance.")
-				.expect("Balance was checked early, \
-				No changes to balance in between; \
-				qed");
 			<Computations<T>>::insert(&random_hash, computation);
 			Self::deposit_event(RawEvent::TaskOffloaded(random_hash));
 		}
@@ -456,14 +470,14 @@ decl_module! {
 			let index = computation.clients.iter().position(|x| *x == sender)
 				.ok_or("Client is not part of this computation")?;
 
-			// this reveal might end the commit phase
+			// this reveal might finish the commit phase
 			if computation.reveal_started_at.is_none() {
+				// timestamp is no user input -> checked_sub not necessary
 				let now = <timestamp::Module<T>>::get();
-				let time_is_up = now.checked_sub(&computation.started_at)
-					.ok_or("Time calculation underflow.")? >= Self::timelimit_commit();
+				let time_is_up = (now.clone() - computation.started_at.clone())
+					>= Self::timelimit_commit();
 				let all_commited = computation.commits.iter()
 					.filter(|x| x.is_some()).count() == computation.clients.len();
-
 				ensure!(all_commited || time_is_up, "Reveal phase cannot be started, yet.");
 				computation.reveal_started_at = Some(now);
 			}
@@ -471,13 +485,58 @@ decl_module! {
 			let commit = computation.commits[index].ok_or("Client did not commit.")?;
 			let dest = &mut computation.reveals[index];
 			ensure!(dest.is_none(), "Client already revealed.");
-
 			let is_valid = (&sender, &id, &revelation)
 				.using_encoded(T::Hashing::hash) == commit;
 			ensure!(is_valid, "Reveal does not match the commit.");
 
 			*dest = Some(revelation);
 			<Computations<T>>::insert(&id, computation);
+		}
+
+		fn finish(origin, id: T::Hash) {
+			let sender = ensure_signed(origin)?;
+
+			ensure!(<Computations<T>>::exists(&id), "Computation does not exist.");
+			let computation = <Computations<T>>::get(&id);
+
+			ensure!(computation.clients.contains(&sender) || computation.owner == sender,
+				"Only involved clients and the owner is allowed to finish.");
+
+			// timestamps are no user input -> checked_sub not necessary
+			let now = <timestamp::Module<T>>::get();
+			let time_up_since_reveal = computation.reveal_started_at.and_then(|x| {
+				Some((now.clone() - x) >= Self::timelimit_reveal())
+			}).unwrap_or(false);
+			let time_up_since_start = (now.clone() - computation.started_at)
+					>= Self::timelimit_commit() + Self::timelimit_reveal();
+			let all_revealed = computation.reveals.iter()
+				.filter(|x| x.is_some()).count() == computation.clients.len();
+			ensure!(time_up_since_reveal || time_up_since_start || all_revealed,
+				"Computation cannot be finished, yet.");
+
+			let mut result = Vec::with_capacity(computation.clients.len());
+
+			// Infallible from here on
+
+			for (i, client) in computation.clients.into_iter().enumerate() {
+				if let Some(outcome) = &computation.reveals[i] {
+					result.push((client, outcome.clone()));
+					Self::add_available(&sender)
+						.expect("`AvailableClientsCount` <= `ClientsCount - 1`,
+						because at least this client is not available, \
+						therefore no overflow of `AvailableClientsCount` can happen; \
+						`client` not in `AvailableClientsIndex` because it is part of this comp; \
+						qed");
+				} else {
+					let deposit = <Clients<T>>::get(&client).deposit;
+					let (imbalance, _) = T::Currency::slash_reserved(&client, deposit);
+					T::Slash::on_unbalanced(imbalance);
+					// TODO: remove client completly
+				}
+			}
+
+			<Computations<T>>::remove(&id);
+			T::Reward::on_reward(result, computation.reward);
 		}
 	}
 }
@@ -522,9 +581,11 @@ impl<T: Trait> Module<T> {
 
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Default)]
-pub struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
+pub struct Computation<Hash, Task, Balance, AccountId, Moment, Outcome>  {
 	id: Hash,
+	owner: AccountId,
 	task: Task,
+	reward: Balance,
 	started_at: Moment,
 	reveal_started_at: Option<Moment>,
 	timelimit_commit: Moment,
