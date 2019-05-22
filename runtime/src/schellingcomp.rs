@@ -236,13 +236,12 @@ use support::{
 };
 use system::ensure_signed;
 use parity_codec::{Encode, Decode};
-use runtime_primitives::traits::{As, EnsureOrigin, Hash};
+use runtime_primitives::traits::{As, EnsureOrigin, Hash, CheckedSub};
 use core::convert::TryInto;
 use core::mem::size_of;
 use rand::{Rng, SeedableRng, rngs::SmallRng, distributions::Uniform};
 use rstd::vec;
 
-type Salt = u128;
 type ClientIndex = u64;
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 type ClientOf<T> = Client<<T as system::Trait>::AccountId, BalanceOf<T>>; 
@@ -327,7 +326,6 @@ decl_module! {
 			let client = Client {
 				id: sender.clone(),
 				deposit: Self::deposit(),
-				busy: false
 			};
 
 			<Clients<T>>::insert(&sender, &client);
@@ -433,6 +431,54 @@ decl_module! {
 			<Computations<T>>::insert(&random_hash, computation);
 			Self::deposit_event(RawEvent::TaskOffloaded(random_hash));
 		}
+
+		fn commit(origin, id: T::Hash, commitment: T::Hash) {
+			let sender = ensure_signed(origin)?;
+
+			ensure!(<Computations<T>>::exists(&id), "Computation does not exist.");
+			let mut computation = <Computations<T>>::get(&id);
+			let index = computation.clients.iter().position(|x| *x == sender)
+				.ok_or("Client is not part of this computation")?;
+			ensure!(computation.reveal_started_at.is_none(), "Reveal phase did start.");
+
+			// Will not panic as clients and commits have the same size
+			let dest = &mut computation.commits[index];
+			ensure!(dest.is_none(), "Client already committed.");
+			*dest = Some(commitment);
+			<Computations<T>>::insert(&id, computation);
+		}
+
+		fn reveal(origin, id: T::Hash, revelation: T::Outcome) {
+			let sender = ensure_signed(origin)?;
+
+			ensure!(<Computations<T>>::exists(&id), "Computation does not exist.");
+			let mut computation = <Computations<T>>::get(&id);
+			let index = computation.clients.iter().position(|x| *x == sender)
+				.ok_or("Client is not part of this computation")?;
+
+			// this reveal might end the commit phase
+			if computation.reveal_started_at.is_none() {
+				let now = <timestamp::Module<T>>::get();
+				let time_is_up = now.checked_sub(&computation.started_at)
+					.ok_or("Time calculation underflow.")? >= Self::timelimit_commit();
+				let all_commited = computation.commits.iter()
+					.filter(|x| x.is_some()).count() == computation.clients.len();
+
+				ensure!(all_commited || time_is_up, "Reveal phase cannot be started, yet.");
+				computation.reveal_started_at = Some(now);
+			}
+
+			let commit = computation.commits[index].ok_or("Client did not commit.")?;
+			let dest = &mut computation.reveals[index];
+			ensure!(dest.is_none(), "Client already revealed.");
+
+			let is_valid = (&sender, &id, &revelation)
+				.using_encoded(T::Hashing::hash) == commit;
+			ensure!(is_valid, "Reveal does not match the commit.");
+
+			*dest = Some(revelation);
+			<Computations<T>>::insert(&id, computation);
+		}
 	}
 }
 
@@ -485,7 +531,7 @@ pub struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
 	timelimit_reveal: Moment,
 	clients: Vec<AccountId>,
 	commits: Vec<Option<Hash>>,
-	reveals: Vec<Option<(Salt, Outcome)>>,
+	reveals: Vec<Option<Outcome>>,
 }
 
 #[cfg_attr(feature = "std", derive(Debug))]
@@ -493,7 +539,6 @@ pub struct Computation<Hash, Task, AccountId, Moment, Outcome>  {
 pub struct Client<AccountId, Balance>  {
 	id: AccountId,
 	deposit: Balance,
-	busy: bool
 }
 
 /// tests for this module
