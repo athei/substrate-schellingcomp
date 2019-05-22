@@ -16,7 +16,7 @@ use runtime_primitives::{
 	ApplyResult, transaction_validity::TransactionValidity, generic, create_runtime_str,
 	traits::{self, NumberFor, BlakeTwo256, Block as BlockT, StaticLookup, Verify},
 };
-use support::traits::OnUnbalanced;
+use support::traits::{OnUnbalanced, ReservableCurrency};
 use client::{
 	block_builder::api::{CheckInherentsResult, InherentData, self as block_builder_api},
 	runtime_api, impl_runtime_apis
@@ -200,15 +200,26 @@ impl schellingcomp::Trait for Runtime {
 
 pub struct SchellingDelegate {}
 
-impl<AccountId, Outcome, Balance> schellingcomp::OnReward<AccountId, Outcome, Balance> for SchellingDelegate {
-	fn on_reward(_good_clients: Vec<(AccountId, Outcome)>, _shared_reward: Balance) {
+impl<Outcome> schellingcomp::OnReward<AccountId, Outcome, u128> for SchellingDelegate
+where
+	Outcome: Ord,
+{
+	// Naive winner takes it all example. For even number of clients or when clients
+	// deliver the same result there is no clear winner. In this case it is undefined which
+	// client gets the reward.
+	fn on_reward(mut good_clients: Vec<(AccountId, Outcome)>, reward: u128, from: AccountId) {
+		if good_clients.is_empty() {
+			return;
+		}
+
+		good_clients.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+		let (winner, _) = &good_clients[good_clients.len() / 2];
+		let _ = Balances::repatriate_reserved(&from, winner, reward);
 	}
 }
 
 impl<Imbalance> OnUnbalanced<Imbalance> for SchellingDelegate {
-	fn on_unbalanced(_amount: Imbalance) {
-
-	}
+	fn on_unbalanced(_amount: Imbalance) { /* do nothing on slash */ }
 }
 
 construct_runtime!(

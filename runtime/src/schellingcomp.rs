@@ -274,7 +274,7 @@ pub trait Trait: balances::Trait + timestamp::Trait {
 }
 
 pub trait OnReward<AccountId, Outcome, Balance> {
-	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, shared_reward: Balance);
+	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, reward: Balance, from: AccountId);
 }
 
 decl_event!(
@@ -536,7 +536,7 @@ decl_module! {
 			}
 
 			<Computations<T>>::remove(&id);
-			T::Reward::on_reward(result, computation.reward);
+			T::Reward::on_reward(result, computation.reward, computation.owner);
 		}
 	}
 }
