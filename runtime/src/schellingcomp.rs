@@ -43,7 +43,6 @@ use runtime_primitives::traits::{As, EnsureOrigin, Hash};
 use core::convert::TryInto;
 use core::mem::size_of;
 use rand::{Rng, SeedableRng, rngs::SmallRng, distributions::Uniform};
-use rstd::vec;
 
 type ClientIndex = u64;
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
@@ -213,12 +212,8 @@ decl_module! {
 			// Alloc Vecs so that they cannot panic later on
 			let mut clients = Vec::with_capacity(client_count);
 			let mut indices = Vec::with_capacity(client_count);
-			let commits = vec![None; client_count];
-			let reveals = vec![None; client_count];
-
 
 			// Infallible from here here on
-
 
 			// Draw clients randomly from available ones.
 			// We know that this is bounded because we checked that there are enough
@@ -236,7 +231,11 @@ decl_module! {
 					therefore the availibilty check will not fail; \
 					qed");
 				indices.push(rng);
-				clients.push(id);
+				clients.push(BusyClient {
+					id,
+					commit: None,
+					reveal: None
+				});
 				if clients.len() == client_count {
 					break;
 				}
@@ -256,8 +255,6 @@ decl_module! {
 				timelimit_commit: Self::timelimit_commit(),
 				timelimit_reveal: Self::timelimit_reveal(),
 				clients,
-				commits,
-				reveals,
 			};
 
 			<Computations<T>>::insert(&random_hash, computation);
@@ -271,14 +268,13 @@ decl_module! {
 
 			ensure!(<Computations<T>>::exists(&id), "Computation does not exist.");
 			let mut computation = <Computations<T>>::get(&id);
-			let index = computation.clients.iter().position(|x| *x == sender)
+			let client = computation.clients.iter_mut().find(|x| x.id == sender)
 				.ok_or("Client is not part of this computation")?;
 			ensure!(computation.reveal_started_at.is_none(), "Reveal phase did start.");
 
 			// Will not panic as clients and commits have the same size
-			let dest = &mut computation.commits[index];
-			ensure!(dest.is_none(), "Client already committed.");
-			*dest = Some(commitment);
+			ensure!(client.commit.is_none(), "Client already committed.");
+			client.commit = Some(commitment);
 			<Computations<T>>::insert(&id, computation);
 
 			Self::deposit_event(RawEvent::ClientCommited(id, sender));
@@ -290,8 +286,9 @@ decl_module! {
 
 			ensure!(<Computations<T>>::exists(&id), "Computation does not exist.");
 			let mut computation = <Computations<T>>::get(&id);
-			let index = computation.clients.iter().position(|x| *x == sender)
-				.ok_or("Client is not part of this computation")?;
+
+			ensure!(computation.clients.iter().find(|x| x.id == sender).is_some(),
+				"Client is not part of this computation");
 
 			// this reveal might finish the commit phase
 			if computation.reveal_started_at.is_none() {
@@ -299,20 +296,24 @@ decl_module! {
 				let now = <timestamp::Module<T>>::get();
 				let time_is_up = (now.clone() - computation.started_at.clone())
 					>= Self::timelimit_commit();
-				let all_commited = computation.commits.iter()
-					.filter(|x| x.is_some()).count() == computation.clients.len();
+				let all_commited = computation.clients.iter()
+					.filter(|x| x.commit.is_some()).count() == computation.clients.len();
 				ensure!(all_commited || time_is_up, "Reveal phase cannot be started, yet.");
 				computation.reveal_started_at = Some(now);
 			}
 
-			let commit = computation.commits[index].ok_or("Client did not commit.")?;
-			let dest = &mut computation.reveals[index];
-			ensure!(dest.is_none(), "Client already revealed.");
+			let client = computation.clients.iter_mut().find(|x| x.id == sender)
+				.expect("We checked that the client exists at the beginning, \
+				we had no mutable borrow to the clients in between; \
+				qed");
+
+			let commit = client.commit.ok_or("Client did not commit.")?;
+			ensure!(client.reveal.is_none(), "Client already revealed.");
 			let is_valid = (&sender, &id, &revelation)
 				.using_encoded(T::Hashing::hash) == commit;
 			ensure!(is_valid, "Reveal does not match the commit.");
 
-			*dest = Some(revelation);
+			client.reveal = Some(revelation);
 			<Computations<T>>::insert(&id, computation);
 
 			Self::deposit_event(RawEvent::ClientRevealed(id, sender));
@@ -326,8 +327,11 @@ decl_module! {
 			ensure!(<Computations<T>>::exists(&id), "Computation does not exist.");
 			let computation = <Computations<T>>::get(&id);
 
-			ensure!(computation.clients.contains(&sender) || computation.owner == sender,
-				"Only involved clients and the owner is allowed to finish.");
+			ensure!(
+				computation.clients.iter().find(|x| x.id == sender).is_some() ||
+				computation.owner == sender,
+				"Only involved clients and the owner is allowed to finish."
+			);
 
 			// timestamps are no user input -> checked_sub not necessary
 			let now = <timestamp::Module<T>>::get();
@@ -336,8 +340,8 @@ decl_module! {
 			}).unwrap_or(false);
 			let time_up_since_start = (now.clone() - computation.started_at)
 					>= Self::timelimit_commit() + Self::timelimit_reveal();
-			let all_revealed = computation.reveals.iter()
-				.filter(|x| x.is_some()).count() == computation.clients.len();
+			let all_revealed = computation.clients.iter()
+				.filter(|x| x.reveal.is_some()).count() == computation.clients.len();
 			ensure!(time_up_since_reveal || time_up_since_start || all_revealed,
 				"Computation cannot be finished, yet.");
 
@@ -345,9 +349,9 @@ decl_module! {
 
 			// Infallible from here on
 
-			for (i, client) in computation.clients.into_iter().enumerate() {
-				if let Some(outcome) = &computation.reveals[i] {
-					result.push((client, outcome.clone()));
+			for client in computation.clients.into_iter() {
+				if let Some(outcome) = client.reveal {
+					result.push((client.id, outcome));
 					Self::add_available(&sender)
 						.expect("`AvailableClientsCount` <= `ClientsCount - 1`,
 						because at least this client is not available, \
@@ -355,10 +359,10 @@ decl_module! {
 						`client` not in `AvailableClientsIndex` because it is part of this comp; \
 						qed");
 				} else {
-					let deposit = <Clients<T>>::get(&client).deposit;
-					let (imbalance, _) = T::Currency::slash_reserved(&client, deposit);
+					let deposit = <Clients<T>>::get(&client.id).deposit;
+					let (imbalance, _) = T::Currency::slash_reserved(&client.id, deposit);
 					T::Slash::on_unbalanced(imbalance);
-					Self::remove(&client)
+					Self::remove(&client.id)
 						.expect("`client` in `computations.clients` -> `client` is registered, \
 						therefore ::exists does not fail; \
 						because at least one client exists the substraction does not underflow; \
@@ -446,13 +450,22 @@ struct Computation<Hash, Task, Balance, AccountId, Moment, Outcome>  {
 	timelimit_commit: Moment,
 	/// Configurable timelimit for the reveal phase.
 	timelimit_reveal: Moment,
-	/// The clients that where selected to carry out the computation. Having this as a
-	/// vector is sensible because the expected number of clients is low.
-	clients: Vec<AccountId>,
+	/// The clients that were selected to carry out the computation. Having this as a
+	/// vector is sensible because the expected number of clients is low. Owner is paying for
+	/// every entry.
+	clients: Vec<BusyClient<AccountId, Hash, Outcome>>,
+}
+
+/// A client that is busy crunching numbers.
+#[cfg_attr(feature = "std", derive(Debug))]
+#[derive(Encode, Decode, Clone, Default, PartialEq, Eq)]
+struct BusyClient<AccountId, Hash, Outcome> {
+	/// Account of this client.
+	id: AccountId,
 	/// The outcome the client commited to.
-	commits: Vec<Option<Hash>>,
-	/// The revealed outcome of the client.
-	reveals: Vec<Option<Outcome>>,
+	commit: Option<Hash>,
+	/// The reveal of the outcome previously commited to.
+	reveal: Option<Outcome>,
 }
 
 /// A client that signed up to do some computation.
