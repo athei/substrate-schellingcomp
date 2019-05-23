@@ -246,7 +246,7 @@ use rstd::vec;
 type ClientIndex = u64;
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
 type NegativeImbalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::NegativeImbalance;
-type ClientOf<T> = Client<<T as system::Trait>::AccountId, BalanceOf<T>>;
+type ClientOf<T> = Client<BalanceOf<T>>;
 type ComputationOf<T> = Computation<
 	<T as system::Trait>::Hash,
 	<T as Trait>::Task,
@@ -337,7 +337,6 @@ decl_module! {
 				.map_err(|_| "Client's balance too low")?;
 
 			let client = Client {
-				id: sender.clone(),
 				deposit: Self::deposit(),
 			};
 
@@ -432,7 +431,6 @@ decl_module! {
 				qed");
 
 			let computation: ComputationOf<T> = Computation {
-				id: random_hash,
 				owner: sender,
 				task,
 				reward,
@@ -609,7 +607,6 @@ impl<T: Trait> Module<T> {
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Default)]
 pub struct Computation<Hash, Task, Balance, AccountId, Moment, Outcome>  {
-	id: Hash,
 	owner: AccountId,
 	task: Task,
 	reward: Balance,
@@ -624,8 +621,7 @@ pub struct Computation<Hash, Task, Balance, AccountId, Moment, Outcome>  {
 
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Clone, Default, PartialEq, Eq)]
-pub struct Client<AccountId, Balance>  {
-	id: AccountId,
+pub struct Client<Balance>  {
 	deposit: Balance,
 }
 
