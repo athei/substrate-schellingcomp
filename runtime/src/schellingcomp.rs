@@ -352,21 +352,22 @@ decl_module! {
 			Self::deposit_event(RawEvent::ClientRegistered(sender));
 		}
 
-		fn remove_client(origin) {
+		fn unregister_client(origin) {
 			let sender = ensure_signed(origin)?;
 			ensure!(<Clients<T>>::exists(&sender), "Client is not registered");
 			ensure!(<AvailableClientsIndex<T>>::exists(&sender), "Client must not be busy");
 
 			let client = <Clients<T>>::get(&sender);
 
-			let total_clients = Self::client_count().checked_sub(1)
-                .ok_or("Client number underflow")?;
-
 			Self::remove_available(&sender)?;
+			Self::remove(&sender)
+				.expect("We checked that the `sender` is registered, \
+				therefore the ::exists check will not fail; \
+				In `register_client` the `ClientCount` is incremented, \
+				it is nowhere decremented but in `Self::remove`, \
+				therefore the substraction will not underflow; \
+				qed");
 			T::Currency::unreserve(&sender, client.deposit);
-			<ClientCount<T>>::put(total_clients);
-
-			Self::deposit_event(RawEvent::ClientRemoved(sender));
 		}
 
 		fn offload_task(origin, task: T::Task, client_count: ClientIndex) {
@@ -531,7 +532,11 @@ decl_module! {
 					let deposit = <Clients<T>>::get(&client).deposit;
 					let (imbalance, _) = T::Currency::slash_reserved(&client, deposit);
 					T::Slash::on_unbalanced(imbalance);
-					// TODO: remove client completly
+					Self::remove(&client)
+						.expect("`client` in `computations.clients` -> `client` is registered, \
+						therefore ::exists does not fail; \
+						because at least one client exists the substraction does not underflow; \
+						qed");
 				}
 			}
 
@@ -575,6 +580,19 @@ impl<T: Trait> Module<T> {
 		<AvailableClientsCount<T>>::put(index_tail);
 		<AvailableClientsIndex<T>>::remove(client);
 
+		Ok(())
+	}
+
+	fn remove(id: &T::AccountId) -> Result {
+		ensure!(<Clients<T>>::exists(id), "Client is not registered");
+
+		let total_clients = Self::client_count().checked_sub(1)
+			.ok_or("Client number underflow")?;
+
+		<ClientCount<T>>::put(total_clients);
+		<Clients<T>>::remove(id);
+
+		Self::deposit_event(RawEvent::ClientRemoved(id.clone()));
 		Ok(())
 	}
 }
