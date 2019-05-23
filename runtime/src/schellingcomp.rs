@@ -1,234 +1,36 @@
-//! # Example Module
+//! # Schellingcomp Module
 //!
-//! <!-- Original author of paragraph: @gavofyork --> 
-//! The Example: A simple example of a runtime module demonstrating
-//! concepts, APIs and structures common to most runtime modules.
+//! The `schellingcomp` Module allows offloading non-verifiable computations to untrusted nodes.
 //!
-//! Run `cargo doc --package srml-example --open` to view this module's documentation.
+//! - [`<schelingcomp>::Trait`](./trait.Trait.html)
+//! - [`Call`](./enum.Call.html)
+//! - [`Module`](./struct.Module.html)
 //!
-//! ### Documentation Guidelines:
+//! ## Overview
 //!
-//! <!-- Original author of paragraph: Various. Based on collation of review comments to PRs addressing issues with -->
-//! <!-- label 'S3-SRML' in https://github.com/paritytech/substrate-developer-hub/issues -->
-//! <ul>
-//!		<li>Documentation comments (i.e. <code>/// comment</code>) - should accompany module functions and be
-//!         restricted to the module interface, not the internals of the module implementation. Only state inputs,
-//!         outputs, and a brief description that mentions whether calling it requires root, but without repeating
-//!         the source code details. Capitalise the first word of each documentation comment and end it with a full
-//!         stop. See <a href="https://github.com/paritytech/substrate#72-contributing-to-documentation-for-substrate-packages"
-//!         target="_blank">Generic example of annotating source code with documentation comments</a></li>
-//! 	<li>Self-documenting code - Try to refactor code to be self-documenting.</li>
-//!		<li>Code comments - Supplement complex code with a brief explanation, not every line of code.</li>
-//!		<li>Identifiers - surround by backticks (i.e. <code>INHERENT_IDENTIFIER</code>, <code>InherentType</code>,
-//!         <code>u64</code>)</li>
-//!		<li>Usage scenarios - should be simple doctests. The compiler should ensure they stay valid.</li>
-//!		<li>Extended tutorials - should be moved to external files and refer to.</li>
-//!		<!-- Original author of paragraph: @AmarRSingh -->
-//!		<li>Mandatory - include all of the sections/subsections where <b>MUST</b> is specified.</li>
-//!		<li>Optional - optionally include sections/subsections where <b>CAN</b> is specified.</li>
-//! </ul>
+//! This module allows nodes to register themselves as so called "clients" by paying
+//! a security deposit. Then anyone can become an "owner" of a computation by offloading a computation to some of these clients. Because
+//! the outcomes of these computations are not easily verifiable a mechansim based on
+//! Schelling Points [as described by Vitalik Buterin](https://blog.ethereum.org/2014/03/28/schellingcoin-a-minimal-trust-universal-data-feed/)
+//! is used to reward or punish the clients for their work.
 //!
-//! ### Documentation Template:<br>
+//! ## Interface
 //!
-//! Copy and paste this template from srml/example/src/lib.rs into file srml/<INSERT_CUSTOM_MODULE_NAME>/src/lib.rs of
-//! your own custom module and complete it.
-//! <details><p><pre>
-//! // Add heading with custom module name
-//!
-//! \# <INSERT_CUSTOM_MODULE_NAME> Module
-//!
-//! // Add simple description
-//!
-//! // Include the following links that shows what trait needs to be implemented to use the module
-//! // and the supported dispatchables that are documented in the Call enum.
-//!
-//! - \[`<INSERT_CUSTOM_MODULE_NAME>::Trait`](./trait.Trait.html)
-//! - \[`Call`](./enum.Call.html)
-//! - \[`Module`](./struct.Module.html)
-//!
-//! \## Overview
-//!
-//! <!-- Original author of paragraph: Various. See https://github.com/paritytech/substrate-developer-hub/issues/44 --> 
-//! // Short description of module purpose.
-//! // Links to Traits that should be implemented.
-//! // What this module is for.
-//! // What functionality the module provides.
-//! // When to use the module (use case examples).
-//! // How it is used.
-//! // Inputs it uses and the source of each input.
-//! // Outputs it produces.
-//!
-//! <!-- Original author of paragraph: @Kianenigma in PR https://github.com/paritytech/substrate/pull/1951 -->
-//! <!-- and comment https://github.com/paritytech/substrate-developer-hub/issues/44#issuecomment-471982710 -->
-//!
-//! \## Terminology
-//!
-//! // Add terminology used in the custom module. Include concepts, storage items, or actions that you think
-//! // deserve to be noted to give context to the rest of the documentation or module usage. The author needs to
-//! // use some judgment about what is included. We don't want a list of every storage item nor types - the user
-//! // can go to the code for that. For example, "transfer fee" is obvious and should not be included, but
-//! // "free balance" and "reserved balance" should be noted to give context to the module.
-//! // Please do not link to outside resources. The reference docs should be the ultimate source of truth.
-//!
-//! <!-- Original author of heading: @Kianenigma in PR https://github.com/paritytech/substrate/pull/1951 -->
-//!
-//! \## Goals
-//!
-//! // Add goals that the custom module is designed to achieve.
-//!
-//! <!-- Original author of heading: @Kianenigma in PR https://github.com/paritytech/substrate/pull/1951 -->
-//!
-//! \### Scenarios
-//!
-//! <!-- Original author of paragraph: @Kianenigma. Based on PR https://github.com/paritytech/substrate/pull/1951 -->
-//!
-//! \#### <INSERT_SCENARIO_NAME>
-//!
-//! // Describe requirements prior to interacting with the custom module.
-//! // Describe the process of interacting with the custom module for this scenario and public API functions used.
-//!
-//! \## Interface
-//!
-//! \### Supported Origins
-//!
-//! // What origins are used and supported in this module (root, signed, none)
-//! // i.e. root when <code>\`ensure_root\`</code> used
-//! // i.e. none when <code>\`ensure_none\`</code> used
-//! // i.e. signed when <code>\`ensure_signed\`</code> used
-//!
-//! <code>\`inherent\`</code> <INSERT_DESCRIPTION>
-//!
-//! <!-- Original author of paragraph: @Kianenigma in comment -->
-//! <!-- https://github.com/paritytech/substrate-developer-hub/issues/44#issuecomment-471982710 -->
-//!
-//! \### Types
-//!
-//! // Type aliases. Include any associated types and where the user would typically define them.
-//!
-//! <code>\`ExampleType\`</code> <INSERT_DESCRIPTION>
-//!
-//! <!-- Original author of paragraph: ??? -->
-//!
-//! // Reference documentation of aspects such as `storageItems` and `dispatchable` functions should only be
-//! // included in the https://docs.rs Rustdocs for Substrate and not repeated in the README file.
-//!
-//! \### Dispatchable Functions
-//!
-//! <!-- Original author of paragraph: @AmarRSingh & @joepetrowski -->
-//!
-//! // A brief description of dispatchable functions and a link to the rustdoc with their actual documentation.
-//!
-//! // <b>MUST</b> have link to Call enum
-//! // <b>MUST</b> have origin information included in function doc
-//! // <b>CAN</b> have more info up to the user
-//!
-//! \### Public Functions
-//!
-//! <!-- Original author of paragraph: @joepetrowski -->
-//!
-//! // A link to the rustdoc and any notes about usage in the module, not for specific functions.
-//! // For example, in the balances module: "Note that when using the publicly exposed functions,
-//! // you (the runtime developer) are responsible for implementing any necessary checks
-//! // (e.g. that the sender is the signer) before calling a function that will affect storage."
-//!
-//! <!-- Original author of paragraph: @AmarRSingh -->
-//!
-//! // It is up to the writer of the respective module (with respect to how much information to provide).
-//!
-//! \#### Public Inspection functions - Immutable (getters)
-//!
-//! // Insert a subheading for each getter function signature
-//!
-//! \##### <code>\`example_getter_name()\`</code>
-//!
-//! // What it returns
-//! // Why, when, and how often to call it
-//! // When it could panic or error
-//! // When safety issues to consider
-//!
-//! \#### Public Mutable functions (changing state)
-//!
-//! // Insert a subheading for each setter function signature
-//!
-//! \##### <code>\`example_setter_name(origin, parameter_name: T::ExampleType)\`</code>
-//!
-//! // What state it changes
-//! // Why, when, and how often to call it
-//! // When it could panic or error
-//! // When safety issues to consider
-//! // What parameter values are valid and why
-//!
-//! \### Storage Items
-//!
-//! // Explain any storage items included in this module
-//!
-//! \### Digest Items
-//!
-//! // Explain any digest items included in this module
-//!
-//! \### Inherent Data
-//!
-//! // Explain what inherent data (if any) is defined in the module and any other related types
-//!
-//! \### Events:
-//!
-//! // Insert events for this module if any
-//!
-//! \### Errors:
-//!
-//! // Explain what generates errors
-//!
-//! \## Usage
-//!
-//! // Insert 2-3 examples of usage and code snippets that show how to use <INSERT_CUSTOM_MODULE_NAME> module in a custom module.
-//!
-//! \### Prerequisites
-//!
-//! // Show how to include necessary imports for <INSERT_CUSTOM_MODULE_NAME> and derive
-//! // your module configuration trait with the `INSERT_CUSTOM_MODULE_NAME` trait.
-//!
-//! \```rust
-//! use <INSERT_CUSTOM_MODULE_NAME>;
+//! ### Dispatchable Functions
 //! 
-//! pub trait Trait: <INSERT_CUSTOM_MODULE_NAME>::Trait { }
-//! \```
+//! - `configure` - Only callable as the `Admin` origin. Configures the parameters of this Module. 
+//! - `register` - Add the origin as a a client by depositing some currency.
+//! - `unregister`- Remove the origin as a client by withdrawing the deposit.
+//! - `offload` - Offload a computation to an arbitrary number of clients. Charges `Reward * client_clount` for the computation.
+//! - `commit` - Commit to a an outcome as a client. The `commitment` is the hash of `origin_id | computation_id | outcome`.
+//! - `reveal` - Reveal the previously commited to outcome. Can only be called after all clients commited or the time is up.
+//! - `finish` - Callable by the cowner or any client to trigger reward calculation after each client revealed or the time is up.
 //!
-//! \### Simple Code Snippet
+//! Please refer to the [`Call`](./enum.Call.html) enum and its associated variants for documentation on each function.
 //!
-//! // Show a simple example (e.g. how to query a public getter function of <INSERT_CUSTOM_MODULE_NAME>)
+//! ### Public Functions
 //!
-//! \### Example from SRML
-//!
-//! // Show a usage example in an actual runtime
-//!
-//! // See:
-//! // - Substrate TCR https://github.com/parity-samples/substrate-tcr
-//! // - Substrate Kitties https://shawntabrizi.github.io/substrate-collectables-workshop/#/
-//!
-//! \## Genesis Config
-//!
-//! <!-- Original author of paragraph: @joepetrowski -->
-//!
-//! \## Dependencies
-//!
-//! // Dependencies on other SRML modules and the genesis config should be mentioned,
-//! // but not the Rust Standard Library.
-//! // Genesis configuration modifications that may be made to incorporate this module
-//! // Interaction with other modules
-//!
-//! <!-- Original author of heading: @AmarRSingh -->
-//!
-//! \## Related Modules
-//!
-//! // Interaction with other modules in the form of a bullet point list
-//!
-//! \## References
-//!
-//! <!-- Original author of paragraph: @joepetrowski -->
-//!
-//! // Links to reference material, if applicable. For example, Phragmen, W3F research, etc.
-//! // that the implementation is based on.
-//! </pre></p></details>
+//! See the [module](./struct.Module.html) for details on publicly available functions.
 
 use support::{
 	decl_module, decl_storage, decl_event, StorageValue, StorageMap, dispatch::Result,
@@ -256,25 +58,33 @@ type ComputationOf<T> = Computation<
 	<T as Trait>::Outcome
 >;
 
+/// Static configuration of the schellingcomp module.
 pub trait Trait: balances::Trait + timestamp::Trait {
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 	/// The currency in which computation power should be payed.
 	type Currency: ReservableCurrency<Self::AccountId>;
-	/// The computational task that should be offloaded.
+	/// The computational task that should be offloaded. If its more complex than a number
+	/// it should probably be an IPFS hash. In any case it should be immuteable so that
+	/// all clients execute the same task.
 	type Task: Parameter + Default;
-	/// The result that should be calculated from the Task.
+	/// The result that is calculated by carrying out the task.
 	type Outcome: Parameter + Default;
-	/// The origin that is allowed configure rewards and deposits.
+	/// The origin that is allowed configure rewards, deposits and time limits.
 	type Admin: EnsureOrigin<Self::Origin>;
-	/// Functor that is responsible to distribute the result.
+	/// Functor that is responsible for shelling out the reward.
 	type Reward: OnReward<Self::AccountId, Self::Outcome, BalanceOf<Self>>;
-	/// Called a deposit is slashed.
+	/// Called when a client deposit is slashed.
 	type Slash: OnUnbalanced<NegativeImbalanceOf<Self>>;
 }
 
+/// Handler for when a computation is finished.
 pub trait OnReward<AccountId, Outcome, Balance> {
-	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, reward: Balance, from: AccountId) -> Option<Outcome>;
+	/// Handler that distributes rewards and determines the canonical result (if any).
+	/// This function must do the actual transfer of reserved currency from the `owner` to
+	/// eligible clients. Slashing deposits of `good_clients` that deliver bad results is not
+	/// yet supported. However, all `good_clients` stayed true to their commitments.
+	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, reward: Balance, owner: AccountId) -> Option<Outcome>;
 }
 
 decl_event!(
@@ -314,6 +124,7 @@ decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		fn deposit_event<T>() = default;
 
+		// Set dynamic config as Admin origin.
 		fn configure(origin, reward: BalanceOf<T>, deposit: BalanceOf<T>, timelimit_commit: T::Moment, timelimit_reveal: T::Moment) {
 			T::Admin::ensure_origin(origin)?;
 
@@ -325,7 +136,8 @@ decl_module! {
 			Self::deposit_event(RawEvent::ConfigurationChanged);
 		}
 
-		fn register_client(origin) {
+		// Register origin as a client to offer computation power.
+		fn register(origin) {
 			let sender = ensure_signed(origin)?;
 
 			ensure!(!<Clients<T>>::exists(&sender), "Client is already registered");
@@ -353,7 +165,8 @@ decl_module! {
 			Self::deposit_event(RawEvent::ClientRegistered(sender));
 		}
 
-		fn unregister_client(origin) {
+		// Remove origin as client to withdraw computation power.
+		fn unregister(origin) {
 			let sender = ensure_signed(origin)?;
 			ensure!(<Clients<T>>::exists(&sender), "Client is not registered");
 			ensure!(<AvailableClientsIndex<T>>::exists(&sender), "Client must not be busy");
@@ -371,7 +184,9 @@ decl_module! {
 				qed");
 		}
 
-		fn offload_task(origin, task: T::Task, client_count: ClientIndex) {
+		// Offload a task to a random set of clients. Origin is charged based on `client_count`
+		// and the static `Reward`.
+		fn offload(origin, task: T::Task, client_count: ClientIndex) {
 			let sender = ensure_signed(origin)?;
 			let reward: BalanceOf<T> = Self::reward().as_().checked_mul(client_count)
 				.map(As::sa)
@@ -383,6 +198,8 @@ decl_module! {
 			ensure!(client_count <= Self::available_clients(), "Not enough clients available.");
 			let client_count: usize = client_count.try_into().map_err(|_| "Too many clients")?;
 
+			// Currently, one origin can only offload one computation per block. We should probably
+			// include some nonce in the hash so this limitation is lifted.
 			let random_hash = (<system::Module<T>>::random_seed(), &sender)
 				.using_encoded(T::Hashing::hash);
 			ensure!(!<Computations<T>>::exists(&random_hash), "This computation already exists.");
@@ -391,9 +208,9 @@ decl_module! {
 			let seed_slice = random_hash.as_ref().get(..size_of::<Seed>())
 				.ok_or("Seed too small for chosen prng.")?;
 			let seed: &<SmallRng as SeedableRng>::Seed = seed_slice.try_into()
-				.map_err(|_| "Failed to convert to prng seeds")?;
+				.map_err(|_| "Failed to convert to prng seed")?;
 
-			// Alloc Vecs so that they cannot panic later
+			// Alloc Vecs so that they cannot panic later on
 			let mut clients = Vec::with_capacity(client_count);
 			let mut indices = Vec::with_capacity(client_count);
 			let commits = vec![None; client_count];
@@ -448,6 +265,7 @@ decl_module! {
 			Self::deposit_event(RawEvent::TaskOffloaded(random_hash));
 		}
 
+		// Commit to a value as a client.
 		fn commit(origin, id: T::Hash, commitment: T::Hash) {
 			let sender = ensure_signed(origin)?;
 
@@ -466,6 +284,7 @@ decl_module! {
 			Self::deposit_event(RawEvent::ClientCommited(id, sender));
 		}
 
+		// Reveal the outcome previously commited to.
 		fn reveal(origin, id: T::Hash, revelation: T::Outcome) {
 			let sender = ensure_signed(origin)?;
 
@@ -499,6 +318,8 @@ decl_module! {
 			Self::deposit_event(RawEvent::ClientRevealed(id, sender));
 		}
 
+		// Wrap up a finished computation. This distributes the reward among the clients
+		// and emits an event informing all nodes about the canonical outcome.
 		fn finish(origin, id: T::Hash) {
 			let sender = ensure_signed(origin)?;
 
@@ -554,6 +375,7 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+	// Move an account from busy to available.
 	fn add_available(client: &T::AccountId) -> Result {
 		let available = Self::available_clients();
 		let available_add = available.checked_add(1).ok_or("Available index overflow.")?;
@@ -567,6 +389,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	// Move an account from available to busy.
 	fn remove_available(client: &T::AccountId) -> Result {
 		ensure!(<AvailableClientsIndex<T>>::exists(client), "Client is not available.");
 		let index = <AvailableClientsIndex<T>>::get(client);
@@ -590,6 +413,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	// Remove an account so that it is no longer a client.
 	fn remove(id: &T::AccountId) -> Result {
 		ensure!(<Clients<T>>::exists(id), "Client is not registered");
 
@@ -604,24 +428,38 @@ impl<T: Trait> Module<T> {
 	}
 }
 
+/// An ongoing computation.
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Default)]
-pub struct Computation<Hash, Task, Balance, AccountId, Moment, Outcome>  {
+struct Computation<Hash, Task, Balance, AccountId, Moment, Outcome>  {
+	/// The account that offloaded this computation and pays for it.
 	owner: AccountId,
+	/// The assignment that is calculated by this computation.
 	task: Task,
+	/// The reward that is payed to the clients when the computation is finished.
 	reward: Balance,
+	/// Timestamp when the computation was started.
 	started_at: Moment,
+	/// Timestamp when reveal phase was started.
 	reveal_started_at: Option<Moment>,
+	/// Configurable time limit for the commit phase.
 	timelimit_commit: Moment,
+	/// Configurable timelimit for the reveal phase.
 	timelimit_reveal: Moment,
+	/// The clients that where selected to carry out the computation. Having this as a
+	/// vector is sensible because the expected number of clients is low.
 	clients: Vec<AccountId>,
+	/// The outcome the client commited to.
 	commits: Vec<Option<Hash>>,
+	/// The revealed outcome of the client.
 	reveals: Vec<Option<Outcome>>,
 }
 
+/// A client that signed up to do some computation.
 #[cfg_attr(feature = "std", derive(Debug))]
 #[derive(Encode, Decode, Clone, Default, PartialEq, Eq)]
-pub struct Client<Balance>  {
+struct Client<Balance>  {
+	/// The deposit the client payed on registering.
 	deposit: Balance,
 }
 

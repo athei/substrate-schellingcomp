@@ -1,4 +1,4 @@
-//! The Substrate Node Template runtime. This can be compiled with `#[no_std]`, ready for Wasm.
+//! The Node hosting the [`Schellingcomp Module`](./schellingcomp/index.html).
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(not(feature = "std"), feature(alloc))]
@@ -56,7 +56,7 @@ pub type BlockNumber = u64;
 /// Index of an account's extrinsic in the chain.
 pub type Nonce = u64;
 
-/// Used for the module template in `./template.rs`
+/// Offloading computations to untrusted nodes.
 pub mod schellingcomp;
 
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
