@@ -274,20 +274,22 @@ pub trait Trait: balances::Trait + timestamp::Trait {
 }
 
 pub trait OnReward<AccountId, Outcome, Balance> {
-	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, reward: Balance, from: AccountId);
+	fn on_reward(good_clients: Vec<(AccountId, Outcome)>, reward: Balance, from: AccountId) -> Option<Outcome>;
 }
 
 decl_event!(
 	pub enum Event<T> where
-		Balance = BalanceOf<T>,
 		AccountId = <T as system::Trait>::AccountId,
 		Hash = <T as system::Trait>::Hash,
-		Moment = <T as timestamp::Trait>::Moment,
+		Outcome = <T as Trait>::Outcome,
 	{
-		ConfigurationChanged(Balance, Balance, Moment, Moment),
+		ConfigurationChanged,
 		ClientRegistered(AccountId),
-		ClientRemoved(AccountId),
+		ClientUnregistered(AccountId),
 		TaskOffloaded(Hash),
+		ClientCommited(Hash, AccountId),
+		ClientRevealed(Hash, AccountId),
+		ComputationFinished(Hash, Option<Outcome>),
 	}
 );
 
@@ -320,7 +322,7 @@ decl_module! {
 			<TimelimitCommit<T>>::put(&timelimit_reveal);
 			<TimelimitReveal<T>>::put(&timelimit_commit);
 
-			Self::deposit_event(RawEvent::ConfigurationChanged(reward, deposit, timelimit_commit, timelimit_reveal));
+			Self::deposit_event(RawEvent::ConfigurationChanged);
 		}
 
 		fn register_client(origin) {
@@ -360,6 +362,7 @@ decl_module! {
 			let client = <Clients<T>>::get(&sender);
 
 			Self::remove_available(&sender)?;
+			T::Currency::unreserve(&sender, client.deposit);
 			Self::remove(&sender)
 				.expect("We checked that the `sender` is registered, \
 				therefore the ::exists check will not fail; \
@@ -367,7 +370,6 @@ decl_module! {
 				it is nowhere decremented but in `Self::remove`, \
 				therefore the substraction will not underflow; \
 				qed");
-			T::Currency::unreserve(&sender, client.deposit);
 		}
 
 		fn offload_task(origin, task: T::Task, client_count: ClientIndex) {
@@ -444,6 +446,7 @@ decl_module! {
 			};
 
 			<Computations<T>>::insert(&random_hash, computation);
+
 			Self::deposit_event(RawEvent::TaskOffloaded(random_hash));
 		}
 
@@ -461,6 +464,8 @@ decl_module! {
 			ensure!(dest.is_none(), "Client already committed.");
 			*dest = Some(commitment);
 			<Computations<T>>::insert(&id, computation);
+
+			Self::deposit_event(RawEvent::ClientCommited(id, sender));
 		}
 
 		fn reveal(origin, id: T::Hash, revelation: T::Outcome) {
@@ -492,6 +497,8 @@ decl_module! {
 
 			*dest = Some(revelation);
 			<Computations<T>>::insert(&id, computation);
+
+			Self::deposit_event(RawEvent::ClientRevealed(id, sender));
 		}
 
 		fn finish(origin, id: T::Hash) {
@@ -541,7 +548,9 @@ decl_module! {
 			}
 
 			<Computations<T>>::remove(&id);
-			T::Reward::on_reward(result, computation.reward, computation.owner);
+			let outcome = T::Reward::on_reward(result, computation.reward, computation.owner);
+
+			Self::deposit_event(RawEvent::ComputationFinished(id, outcome));
 		}
 	}
 }
@@ -592,7 +601,7 @@ impl<T: Trait> Module<T> {
 		<ClientCount<T>>::put(total_clients);
 		<Clients<T>>::remove(id);
 
-		Self::deposit_event(RawEvent::ClientRemoved(id.clone()));
+		Self::deposit_event(RawEvent::ClientUnregistered(id.clone()));
 		Ok(())
 	}
 }

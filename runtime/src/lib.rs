@@ -207,14 +207,15 @@ where
 	// Naive winner takes it all example. For even number of clients or when clients
 	// deliver the same result there is no clear winner. In this case it is undefined which
 	// client gets the reward.
-	fn on_reward(mut good_clients: Vec<(AccountId, Outcome)>, reward: u128, from: AccountId) {
+	fn on_reward(mut good_clients: Vec<(AccountId, Outcome)>, reward: u128, from: AccountId) -> Option<Outcome> {
 		if good_clients.is_empty() {
-			return;
+			return None;
 		}
 
 		good_clients.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
-		let (winner, _) = &good_clients[good_clients.len() / 2];
-		let _ = Balances::repatriate_reserved(&from, winner, reward);
+		let (winner, outcome) = good_clients.remove(good_clients.len() / 2);
+		let _ = Balances::repatriate_reserved(&from, &winner, reward);
+		Some(outcome)
 	}
 }
 
