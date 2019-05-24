@@ -236,7 +236,7 @@ construct_runtime!(
 		Indices: indices,
 		Balances: balances,
 		Sudo: sudo,
-		Schellingcomp: schellingcomp::{Module, Call, Storage, Event<T>},
+		Schellingcomp: schellingcomp,
 	}
 );
 

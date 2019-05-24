@@ -104,10 +104,10 @@ decl_event!(
 
 decl_storage! {
 	trait Store for Module<T: Trait> as Schellingcomp {
-		Reward get(reward): BalanceOf<T>;
-		Deposit get(deposit): BalanceOf<T>;
-		TimelimitCommit get(timelimit_commit): T::Moment;
-		TimelimitReveal get(timelimit_reveal): T::Moment;
+		Reward get(reward) config(): BalanceOf<T>;
+		Deposit get(deposit) config(): BalanceOf<T>;
+		TimelimitCommit get(timelimit_commit) config(): T::Moment;
+		TimelimitReveal get(timelimit_reveal) config(): T::Moment;
 
 		Computations: map T::Hash => ComputationOf<T>;
 		Clients: map T::AccountId => ClientOf<T>;
@@ -192,10 +192,8 @@ decl_module! {
 				.ok_or("Reward calculation overflow")?;
 
 			ensure!(T::Currency::can_reserve(&sender, reward), "Not enough balance");
-
 			ensure!(client_count > 0, "Must offload to at least one client");
 			ensure!(client_count <= Self::available_clients(), "Not enough clients available.");
-			let client_count: usize = client_count.try_into().map_err(|_| "Too many clients")?;
 
 			// Currently, one origin can only offload one computation per block. We should probably
 			// include some nonce in the hash so this limitation is lifted.
@@ -209,37 +207,23 @@ decl_module! {
 			let seed: &<SmallRng as SeedableRng>::Seed = seed_slice.try_into()
 				.map_err(|_| "Failed to convert to prng seed")?;
 
-			// Alloc Vecs so that they cannot panic later on
-			let mut clients = Vec::with_capacity(client_count);
-			let mut indices = Vec::with_capacity(client_count);
-
 			// Infallible from here here on
 
 			// Draw clients randomly from available ones.
-			// We know that this is bounded because we checked that there are enough
-			// clients available. However, in a production environment this probably should
-			// be handled differently.
 			let mut prng = SmallRng::from_seed(*seed);
-			let distribution = Uniform::new(0, Self::available_clients());
-			for rng in prng.sample_iter::<ClientIndex, _>(&distribution) {
-				if indices.contains(&rng) {
-					continue;
-				}
+			let clients = (0..client_count).map(|_| {
+				let rng = prng.sample(Uniform::new(0, Self::available_clients()));
 				let id = <AvailableClientsArray<T>>::get(&rng);
 				Self::remove_available(&id)
 					.expect("`id is pulled from the AvailableClientsArray, \
-					therefore the availibilty check will not fail; \
+					therefore the availibility check will not fail; \
 					qed");
-				indices.push(rng);
-				clients.push(BusyClient {
+				BusyClient {
 					id,
 					commit: None,
-					reveal: None
-				});
-				if clients.len() == client_count {
-					break;
+					reveal: None,
 				}
-			}
+			}).collect();
 
 			T::Currency::reserve(&sender, reward).map_err(|_| "Not enough balance.")
 				.expect("Balance was checked early, \
