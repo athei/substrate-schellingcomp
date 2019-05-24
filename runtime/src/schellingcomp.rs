@@ -110,6 +110,7 @@ decl_storage! {
 		TimelimitReveal get(timelimit_reveal) config(): T::Moment;
 
 		Computations: map T::Hash => ComputationOf<T>;
+
 		Clients: map T::AccountId => ClientOf<T>;
 		ClientCount get(client_count): ClientIndex;
 
@@ -314,7 +315,7 @@ decl_module! {
 			ensure!(
 				computation.clients.iter().find(|x| x.id == sender).is_some() ||
 				computation.owner == sender,
-				"Only involved clients and the owner is allowed to finish."
+				"Only involved clients and the owner are allowed to finish."
 			);
 
 			// timestamps are no user input -> checked_sub not necessary
@@ -467,10 +468,10 @@ mod tests {
 
 	use runtime_io::with_externalities;
 	use primitives::{H256, Blake2Hasher};
-	use support::{impl_outer_origin, assert_ok};
+	use support::{impl_outer_origin, assert_ok, assert_noop};
 	use runtime_primitives::{
 		BuildStorage,
-		traits::{BlakeTwo256, IdentityLookup},
+		traits::{BlakeTwo256, IdentityLookup, Hash as HashTrait},
 		testing::{Digest, DigestItem, Header}
 	};
 
@@ -480,7 +481,8 @@ mod tests {
 
 	pub struct Delegate;
 	impl OnReward<u64, u64, u64> for Delegate {
-		fn on_reward(_good_clients: Vec<(u64, u64)>, _reward: u64, _owner: u64) -> Option<u64> {
+		fn on_reward(_good_clients: Vec<(u64, u64)>, reward: u64, owner: u64) -> Option<u64> {
+			Currency::unreserve(&owner, reward);
 			None
 		}
 	}
@@ -523,7 +525,12 @@ mod tests {
 		type Slash = ();
 
 	}
-	type Schellingcomp = Module<Test>;
+
+	type Schelling = Module<Test>;
+	type Currency = <Test as Trait>::Currency;
+	type Time = timestamp::Module<Test>;
+	type Hash = <Test as system::Trait>::Hash;
+	type Hashing = <Test as system::Trait>::Hashing;
 
 	const ALICE: u64 = 0;
 	const BOB: u64 = 1;
@@ -556,19 +563,408 @@ mod tests {
 		t.extend(GenesisConfig::<Test>{
 			reward: 100,
 			deposit: 1000,
-			timelimit_commit: 2,
+			timelimit_commit: 1,
 			timelimit_reveal: 1,
 		}.build_storage().unwrap().0);
 		t.into()
 	}
 
+	fn register_all() {
+			assert_ok!(Schelling::register(Origin::signed(ALICE)));
+			assert_ok!(Schelling::register(Origin::signed(BOB)));
+			assert_ok!(Schelling::register(Origin::signed(CHARLY)));
+			assert_ok!(Schelling::register(Origin::signed(DAVE)))
+	}
+
+	fn get_computation_id(sender: u64) -> <Test as system::Trait>::Hash {
+		(<system::Module<Test>>::random_seed(), &sender)
+			.using_encoded(Hashing::hash)
+	}
+
 	#[test]
 	fn genesis_config_works() {
 		with_externalities(&mut new_test_ext(), || {
-			assert_eq!(Schellingcomp::reward(), 100);
-			assert_eq!(Schellingcomp::deposit(), 1000);
-			assert_eq!(Schellingcomp::timelimit_commit(), 2);
-			assert_eq!(Schellingcomp::timelimit_reveal(), 1);
+			assert_eq!(Schelling::reward(), 100);
+			assert_eq!(Schelling::deposit(), 1000);
+			assert_eq!(Schelling::timelimit_commit(), 1);
+			assert_eq!(Schelling::timelimit_reveal(), 1);
+		});
+	}
+
+	#[test]
+	fn configure_works() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_ok!(Schelling::configure(Origin::ROOT, 0, 1, 2, 3));
+		});
+	}
+
+	#[test]
+	fn configure_permission_denied() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::configure(Origin::signed(ALICE), 0, 1, 2, 3),
+				"bad origin: expected to be a root origin");
+		});
+	}
+
+	#[test]
+	fn register_works() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_ok!(Schelling::register(Origin::signed(ALICE)));
+			assert_eq!(Schelling::client_count(), 1);
+			assert!(<Clients<Test>>::exists(ALICE));
+			assert_eq!(Schelling::available_clients(), 1);
+			assert!(<AvailableClientsIndex<Test>>::exists(ALICE));
+			assert_eq!(Currency::free_balance(ALICE), 10_000 - 1000);
+		});
+	}
+
+	#[test]
+	fn double_register_fails() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_ok!(Schelling::register(Origin::signed(ALICE)));
+			assert_noop!(Schelling::register(Origin::signed(ALICE)),
+				"Client is already registered");
+		});
+	}
+
+	#[test]
+	fn register_not_enough_balance_fails() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::register(Origin::signed(EVE)), "Client's balance too low");
+		});
+	}
+
+	#[test]
+	fn register_client_overflow() {
+		with_externalities(&mut new_test_ext(), || {
+			<ClientCount<Test>>::put(u64::max_value());
+			assert_noop!(Schelling::register(Origin::signed(ALICE)),
+				"Maximum number of clients reached");
+		});
+	}
+
+	#[test]
+	fn unregister_works() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::unregister(Origin::signed(BOB)));
+			assert_eq!(Schelling::client_count(), 3);
+			assert!(!<Clients<Test>>::exists(BOB));
+			assert_eq!(Schelling::available_clients(), 3);
+			assert!(!<AvailableClientsIndex<Test>>::exists(BOB));
+			assert!(<AvailableClientsArray<Test>>::get(<AvailableClientsIndex<Test>>::get(CHARLY))
+				== CHARLY;)
+		});
+	}
+
+	#[test]
+	fn unregister_client_not_registered_fails() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_ok!(Schelling::register(Origin::signed(ALICE)));
+			assert_noop!(Schelling::unregister(Origin::signed(BOB)),
+				"Client is not registered");
+		});
+	}
+
+	#[test]
+	fn unregister_busy_client_fails() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_ok!(Schelling::register(Origin::signed(ALICE)));
+			<AvailableClientsIndex<Test>>::remove(ALICE);
+			assert_noop!(Schelling::unregister(Origin::signed(ALICE)),
+				"Client must not be busy");
+		});
+	}
+
+	#[test]
+	fn offload_works() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 99, 4));
+			assert_eq!(Currency::free_balance(ALICE), 10_000 - (4 * 100) - 1000);
+			assert_eq!(Schelling::available_clients(), 0);
+
+			let id = get_computation_id(ALICE);
+			assert!(<Computations<Test>>::exists(id));
+			let comp = <Computations<Test>>::get(id);
+			assert_eq!(comp.owner, ALICE);
+			assert_eq!(comp.task, 99);
+			assert_eq!(comp.reward, 4 * 100);
+			assert_eq!(comp.started_at, Time::get());
+			assert_eq!(comp.reveal_started_at, None);
+			assert_eq!(comp.clients.len(), 4);
+		});
+	}
+
+	#[test]
+	fn offload_to_none_fails() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::offload(Origin::signed(ALICE), 44, 0),
+				"Must offload to at least one client");
+		});
+	}
+
+	#[test]
+	fn offload_reward_calculation_overflow() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::offload(Origin::signed(ALICE), 44, u64::max_value() / 2),
+				"Reward calculation overflow");
+		});
+	}
+
+	#[test]
+	fn offload_not_enough_balance() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::offload(Origin::signed(EVE), 44, 1),
+				"Not enough balance");
+		});
+	}
+
+	#[test]
+	fn offload_not_enough_clients() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::offload(Origin::signed(ALICE), 44, 1),
+				"Not enough clients available.");
+		});
+	}
+
+	#[test]
+	fn commit_works() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+			let commitment = ALICE.using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commitment));
+			let comp = <Computations<Test>>::get(id);
+			assert_eq!(comp.clients.iter().find(|x| x.id == BOB).unwrap().commit.unwrap(), commitment);
+		});
+	}
+
+	#[test]
+	fn commit_computation_does_not_exit() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::commit(Origin::signed(BOB), Hash::default(), Hash::default()),
+				"Computation does not exist.");
+		});
+	}
+
+	#[test]
+	fn commit_client_no_member_of_computation() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+			assert_noop!(Schelling::commit(Origin::signed(EVE), id, Hash::default()),
+				"Client is not part of this computation");
+		});
+	}
+
+	#[test]
+	fn commit_client_reveal_phase_did_start() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+
+			let id = get_computation_id(ALICE);
+			let mut comp = <Computations<Test>>::get(id);
+			comp.reveal_started_at = Some(Time::get());
+			<Computations<Test>>::insert(id, comp);
+
+			assert_noop!(Schelling::commit(Origin::signed(CHARLY), id, Hash::default()),
+				"Reveal phase did start.");
+		});
+	}
+
+	#[test]
+	fn commit_already_commited() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, Hash::default()));
+			assert_noop!(Schelling::commit(Origin::signed(BOB), id, Hash::default()),
+				"Client already committed.");
+		});
+	}
+
+	#[test]
+	fn reveal_works_time_is_up() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			Time::set_timestamp(1);
+			let id = get_computation_id(ALICE);
+			let commit = (BOB, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			assert_ok!(Schelling::reveal(Origin::signed(BOB), id, 42));
+			let comp = <Computations<Test>>::get(id);
+			assert_eq!(comp.clients.iter().find(|x| x.id == BOB).unwrap().reveal.unwrap(), 42);
+		});
+	}
+
+	#[test]
+	fn reveal_works_all_commited() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+
+			let commit = (ALICE, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(ALICE), id, commit));
+			let commit = (BOB, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			let commit = (CHARLY, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(CHARLY), id, commit));
+			let commit = (DAVE, id, 99_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(DAVE), id, commit));
+
+			assert_ok!(Schelling::reveal(Origin::signed(DAVE), id, 99));
+			let comp = <Computations<Test>>::get(id);
+			assert_eq!(comp.clients.iter().find(|x| x.id == DAVE).unwrap().reveal.unwrap(), 99);
+		});
+	}
+
+	#[test]
+	fn reveal_computation_does_exist() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::reveal(Origin::signed(DAVE), Hash::default(), 42),
+				"Computation does not exist.");
+		});
+	}
+
+	#[test]
+	fn reveal_client_not_part() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+			assert_noop!(Schelling::reveal(Origin::signed(EVE), id, 42),
+				"Client is not part of this computation");
+		});
+	}
+
+	#[test]
+	fn reveal_not_ready_yet() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+
+			let commit = (BOB, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			assert_noop!(Schelling::reveal(Origin::signed(BOB), id, 42),
+				"Reveal phase cannot be started, yet.");
+		});
+	}
+
+	#[test]
+	fn reveal_client_did_not_commit() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+
+			Time::set_timestamp(10);
+			let commit = (BOB, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			assert_noop!(Schelling::reveal(Origin::signed(DAVE), id, 42),
+				"Client did not commit.");
+		});
+	}
+
+	#[test]
+	fn reveal_already_revealed() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+
+			Time::set_timestamp(10);
+			let commit = (BOB, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			assert_ok!(Schelling::reveal(Origin::signed(BOB), id, 42));
+			assert_noop!(Schelling::reveal(Origin::signed(BOB), id, 42),
+				"Client already revealed.");
+		});
+	}
+
+	#[test]
+	fn reveal_does_not_match_commit() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+
+			Time::set_timestamp(10);
+			let commit = (BOB, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			assert_noop!(Schelling::reveal(Origin::signed(BOB), id, 99),
+				"Reveal does not match the commit.");
+		});
+	}
+
+	#[test]
+	fn finish_works() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+
+			Time::set_timestamp(2);
+
+			let commit = (ALICE, id, 42_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(ALICE), id, commit));
+			let commit = (BOB, id, 36_u64).using_encoded(Hashing::hash);
+			assert_ok!(Schelling::commit(Origin::signed(BOB), id, commit));
+			assert_ok!(Schelling::reveal(Origin::signed(ALICE), id, 42));
+			assert_ok!(Schelling::reveal(Origin::signed(BOB), id, 36));
+			assert_ok!(Schelling::finish(Origin::signed(BOB), id));
+
+			assert!(!<Computations<Test>>::exists(id));
+			assert_eq!(Currency::reserved_balance(ALICE), 1000);
+			assert_eq!(Currency::free_balance(ALICE), 9000);
+			assert_eq!(Currency::reserved_balance(BOB), 1000);
+			assert_eq!(Currency::free_balance(BOB), 9000);
+			assert_eq!(Currency::reserved_balance(CHARLY), 0);
+			assert_eq!(Currency::free_balance(CHARLY), 9000);
+			assert_eq!(Currency::reserved_balance(DAVE), 0);
+			assert_eq!(Currency::free_balance(DAVE), 9000);
+
+			assert!(<Clients<Test>>::exists(ALICE));
+			assert!(<Clients<Test>>::exists(BOB));
+			assert!(!<Clients<Test>>::exists(CHARLY));
+			assert!(!<Clients<Test>>::exists(DAVE));
+		});
+	}
+
+	#[test]
+	fn finish_computation_does_exist() {
+		with_externalities(&mut new_test_ext(), || {
+			assert_noop!(Schelling::finish(Origin::signed(DAVE), Hash::default()),
+				"Computation does not exist.");
+		});
+	}
+
+	#[test]
+	fn finish_client_not_part() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+			assert_noop!(Schelling::finish(Origin::signed(EVE), id),
+				"Only involved clients and the owner are allowed to finish.");
+		});
+	}
+
+	#[test]
+	fn finish_cannot_be_finished_yet() {
+		with_externalities(&mut new_test_ext(), || {
+			register_all();
+			assert_ok!(Schelling::offload(Origin::signed(ALICE), 77, 4));
+			let id = get_computation_id(ALICE);
+			assert_noop!(Schelling::finish(Origin::signed(BOB), id),
+				"Computation cannot be finished, yet.");
 		});
 	}
 }
