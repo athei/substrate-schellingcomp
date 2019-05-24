@@ -198,8 +198,7 @@ impl schellingcomp::Trait for Runtime {
 	type Slash = SchellingDelegate;
 }
 
-pub struct SchellingDelegate {}
-
+pub struct SchellingDelegate;
 impl<Outcome> schellingcomp::OnReward<AccountId, Outcome, u128> for SchellingDelegate
 where
 	Outcome: Ord,

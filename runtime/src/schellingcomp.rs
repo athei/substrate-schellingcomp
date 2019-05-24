@@ -478,9 +478,13 @@ mod tests {
 		pub enum Origin for Test {}
 	}
 
-	// For testing the module, we construct most of a mock runtime. This means
-	// first constructing a configuration type (`Test`) which `impl`s each of the
-	// configuration traits of modules we want to use.
+	pub struct Delegate;
+	impl OnReward<u64, u64, u64> for Delegate {
+		fn on_reward(_good_clients: Vec<(u64, u64)>, _reward: u64, _owner: u64) -> Option<u64> {
+			None
+		}
+	}
+
 	#[derive(Clone, Eq, PartialEq)]
 	pub struct Test;
 	impl system::Trait for Test {
@@ -496,25 +500,75 @@ mod tests {
 		type Event = ();
 		type Log = DigestItem;
 	}
+	impl timestamp::Trait for Test {
+		type Moment = u64;
+		type OnTimestampSet = ();
+	}
+	impl balances::Trait for Test {
+		type Balance = u64;
+		type OnNewAccount = ();
+		type OnFreeBalanceZero = ();
+		type Event = ();
+		type TransactionPayment = ();
+		type TransferPayment = ();
+		type DustRemoval = ();
+	}
 	impl Trait for Test {
 		type Event = ();
+		type Currency = balances::Module<Self>;
+		type Task = u64;
+		type Outcome = u64;
+		type Admin = system::EnsureRoot<u64>;
+		type Reward = Delegate;
+		type Slash = ();
+
 	}
 	type Schellingcomp = Module<Test>;
+
+	const ALICE: u64 = 0;
+	const BOB: u64 = 1;
+	const CHARLY: u64 = 2;
+	const DAVE: u64 = 3;
+	const EVE: u64 = 4;
 
 	// This function basically just builds a genesis storage key/value store according to
 	// our desired mockup.
 	fn new_test_ext() -> runtime_io::TestExternalities<Blake2Hasher> {
-		system::GenesisConfig::<Test>::default().build_storage().unwrap().0.into()
+		let mut t = system::GenesisConfig::<Test>::default().build_storage().unwrap().0;
+		t.extend(balances::GenesisConfig::<Test>{
+			balances: vec![
+				(ALICE, 10_000),
+				(BOB, 10_000),
+				(CHARLY, 10_000),
+				(DAVE, 10_000),
+				(EVE, 7),
+			],
+			transaction_base_fee: 0,
+			transaction_byte_fee: 0,
+			transfer_fee: 0,
+			creation_fee: 0,
+			existential_deposit: 0,
+			vesting: vec![],
+		}.build_storage().unwrap().0);
+		t.extend(timestamp::GenesisConfig::<Test>{
+			minimum_period: 5,
+		}.build_storage().unwrap().0);
+		t.extend(GenesisConfig::<Test>{
+			reward: 100,
+			deposit: 1000,
+			timelimit_commit: 2,
+			timelimit_reveal: 1,
+		}.build_storage().unwrap().0);
+		t.into()
 	}
 
 	#[test]
-	fn it_works_for_default_value() {
+	fn genesis_config_works() {
 		with_externalities(&mut new_test_ext(), || {
-			// Just a dummy test for the dummy funtion `do_something`
-			// calling the `do_something` function with a value 42
-			//assert_ok!(Schellingcomp::do_something(Origin::signed(1), 42));
-			// asserting that the stored value is equal to what we stored
-			//assert_eq!(Schellingcomp::something(), Some(42));
+			assert_eq!(Schellingcomp::reward(), 100);
+			assert_eq!(Schellingcomp::deposit(), 1000);
+			assert_eq!(Schellingcomp::timelimit_commit(), 2);
+			assert_eq!(Schellingcomp::timelimit_reveal(), 1);
 		});
 	}
 }
