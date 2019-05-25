@@ -335,13 +335,13 @@ decl_module! {
 
 			for client in computation.clients.into_iter() {
 				if let Some(outcome) = client.reveal {
-					result.push((client.id, outcome));
-					Self::add_available(&sender)
+					Self::add_available(&client.id)
 						.expect("`AvailableClientsCount` <= `ClientsCount - 1`,
 						because at least this client is not available, \
 						therefore no overflow of `AvailableClientsCount` can happen; \
 						`client` not in `AvailableClientsIndex` because it is part of this comp; \
 						qed");
+					result.push((client.id, outcome));
 				} else {
 					let deposit = <Clients<T>>::get(&client.id).deposit;
 					let (imbalance, _) = T::Currency::slash_reserved(&client.id, deposit);
